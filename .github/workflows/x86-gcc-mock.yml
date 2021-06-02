@@ -1,0 +1,70 @@
+#
+# linux-gcc-mock.yml
+#
+# This GitHub workflow runs and tests the "mock" build of the uprint facility.
+# So instead of actually running on the AVR toolchain, it builds for x86 and
+# fakes the uart_puts() calls.
+#       
+
+name: Linux Mock Build
+
+
+on:
+  push:
+    branches: [
+      main
+    ]
+  pull_request:
+    branches: [
+      main
+    ]
+  workflow_dispatch:  # Allows running this workflow manually from Actions tab
+
+
+defaults:
+  run:
+    shell: bash
+
+
+# Each "Job" runs in its own VM, and a workflow run is made up of one or more
+# jobs that can run sequentially or in parallel.
+#
+jobs:
+  linux-mock-job:  # Name of this workflow's only job
+
+    strategy:  # GitHub Matrix variables are `${{ matrix.xxx }}`, not `${xxx}`
+      matrix:
+        include:  # put in order of visibility importance (shown in UI)
+
+        - os: ubuntu-20.04
+
+    # https://github.com/actions/virtual-environments#available-environments
+    #
+    runs-on: ${{ matrix.os }}
+
+    # You can put global environment variables here.
+    #
+    env:
+      SOME_ENVIRONMENT_VARIABLES: /you/can/set/them/here
+
+    # Steps are a sequence of tasks that will be executed within a single VM
+    # as part of the job.
+    #
+    steps:  # (no indentatation needed below; so indent the minimum!)
+
+
+  #====# CHECKOUT CODE #======================================================#
+
+    # https://github.com/actions/checkout
+    #
+    - uses: actions/checkout@v2
+
+
+  #====# RUN MOCKING TEST #===================================================#
+
+    - name: Run Mocking Test
+      run: |
+        mkdir build
+        cd build
+        g++ -DMOCKING=1 ../uart_logger.cpp -o test
+        ./test
