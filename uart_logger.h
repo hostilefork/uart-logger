@@ -18,6 +18,12 @@
 
 namespace Uprint {  // caps since namespace can't collide with `uprint()`
 
+class Uprinter {
+  public:
+    virtual void uputc(char ch) = 0;
+    virtual void uputs(const char *cstr) = 0;
+};
+
 
 //=//// UPRINT HELPERS FOR BUILTINS (int, bool, const char*, etc.) /////////=//
 //
@@ -37,15 +43,15 @@ namespace Uprint {  // caps since namespace can't collide with `uprint()`
 //   https://stackoverflow.com/q/24967635/
 //
 
-inline void uprint_helper(const char *cstr) {
-    uart_puts(cstr);
+inline void uprint_helper(Uprinter &u, const char *cstr) {
+    u.uputs(cstr);
 }
 
-inline void uprint_helper(int i) {
+inline void uprint_helper(Uprinter &u, int i) {
     const int radix = 10;
     char buf[10];  // pbf buffers used size 10 (coincidence?)
     itoa(i, buf, radix);  // most of the time, itoa() was being called before
-    uart_puts(buf);
+    u.uputs(buf);
 }
 
 // Ordinary overloading considers integer-convertible types to be ambiguous.
@@ -62,32 +68,32 @@ inline void uprint_helper(int i) {
 
 /*
 inline void uprint_helper(bool b)
-    */ template<typename T> inline auto uprint_helper(T b)
+    */ template<typename T> inline auto uprint_helper(Uprinter &u, T b)
     -> typename std::enable_if<std::is_same<T, bool>::value, void>::type
 {                       // ^-- avoids bool/int overload ambiguity
     if (b)
-        uart_puts("true");
+        u.uputs("true");
     else
-        uart_puts("false");
+        u.uputs("false");
 }
 
 /*
-inline void uprint_helper(uint32_t ul)
-    */ template<typename T> inline auto uprint_helper(T ul)
+inline void uprint_helper(Uprinter &u, uint32_t ul)
+    */ template<typename T> inline auto uprint_helper(Uprinter &u, T ul)
     -> typename std::enable_if<std::is_same<T, uint32_t>::value, void>::type
 {                       // ^-- avoids uint32_t/int overload ambiguity
     const int radix = 10;
     char buf[10];  // pbf buffers used size 10 (coincidence?)
-    ultoa(ul, buf, radix);  // uint32_t used %lu + sprintf(), use ultoa() 
-    uart_puts(buf);
+    ultoa(ul, buf, radix);  // uint32_t used %lu + sprintf(), use ultoa()
+    u.uputs(buf);
 }
 
 /*
-void uprint_helper(char c)
-    */ template<typename T> inline auto uprint_helper(T c)
+void uprint_helper(Uprinter &u, char c)
+    */ template<typename T> inline auto uprint_helper(Uprinter &u, T c)
     -> typename std::enable_if<std::is_same<T, char>::value, void>::type
 {                       // ^-- avoids char/int overload ambiguity
-    uart_putc(c);
+    u.uputc(c);
 }
 
 
@@ -178,8 +184,9 @@ extern const Unspaced<const char*> comma;  // has a space after, but not before
 // namespaces.  There need to be global classes anyway in order to support
 // things like `nospace`.
 
-class UartLogger {
- public:
+class Uprinter2 : public Uprinter {
+
+  public:
     //=//// "SSX" (the only space-printing state) ////=//
     template<typename S1, typename S2, typename... Args>
     void operator()(
@@ -187,12 +194,12 @@ class UartLogger {
         S2 second,
         Args... args
     ){
-        uprint_helper(first);  // neither first nor second are "unspaced"
-        uart_putc(' ');  // thus first<->second junction needs a space
+        uprint_helper(*this, first);  // neither first nor second are "unspaced"
+        uputc(' ');  // thus first<->second junction needs a space
         (*this)(second, args...);  // second *might* need a space after it
 
         // next state starts with the spaceable item we are passing back in
-        // => [SSX | SUX | S]   
+        // => [SSX | SUX | S]
     }
 
     //=//// "SUX" ////=//
@@ -202,12 +209,12 @@ class UartLogger {
         const Unspaced<U2> & second,
         Args... args
     ){
-        uprint_helper(first);  // if prior state was SSX, has space before it
-        uprint_helper(second.held);
+        uprint_helper(*this, first);  // if prior state SSX, has space before it
+        uprint_helper(*this, second.held);
         (*this)(args...);
 
         // handled both, haven't seen Args... so next state could be anything
-        // => [0 | S | U | SSX | SUX | USX | UUX]   
+        // => [0 | S | U | SSX | SUX | USX | UUX]
     }
 
     //=//// "USX" ////=//
@@ -217,11 +224,11 @@ class UartLogger {
         S2 second,
         Args... args
     ){
-        uprint_helper(first.held);
+        uprint_helper(*this, first.held);
         (*this)(second, args...);  // second *may* need a space after it
 
         // next state starts with the spaceable item we are passing back in
-        // => [SSX | SUX | S]   
+        // => [SSX | SUX | S]
     }
 
     //=//// "UUX" ////=//
@@ -231,8 +238,8 @@ class UartLogger {
         const Unspaced<U2> & second,
         Args... args
     ){
-        uprint_helper(first.held);
-        uprint_helper(second.held);
+        uprint_helper(*this, first.held);
+        uprint_helper(*this, second.held);
         (*this)(args...);
 
         // handled both, haven't seen Args... so next state could be anything
@@ -242,20 +249,29 @@ class UartLogger {
     //=//// "S" (terminal state, avoids space prior to newline) ////=//
     template<typename S>
     void operator()(S first) {
-        uprint_helper(first);
-        uart_putc('\n');
+        uprint_helper(*this, first);
+        uputc('\n');
     }
 
     //=//// "U" (terminal state for lone unspaced) ////=//
     template<typename U>
     void operator()(const Unspaced<U> first) {
-        uprint_helper(first.held);
-        uart_putc('\n');
+        uprint_helper(*this, first.held);
+        uputc('\n');
     }
 
     //=//// "0" (terminal state for empty argument list) ////=//
     void operator()() {
-        uart_putc('\n');
+        uputc('\n');
+    }
+};
+
+class UartLogger : public UprinterImpl {
+    void uputc(char ch) override {
+        uart_putc(ch);
+    }
+    void uputs(const char *cstr) override {
+        uart_puts(cstr);
     }
 };
 
@@ -266,7 +282,7 @@ extern UartLogger uprint;
 //
 // See notes on the uprint_helper() overloads that are above the definition of
 // UartLogger for why basic types need their helpers defined before the
-// templates that call them.  But user-defined classes can be anywhere. 
+// templates that call them.  But user-defined classes can be anywhere.
 //
 // While users can define their own helpers, a few basic stock tools seem
 // good to have in the box (like printing in hexadecimal or binary).
@@ -291,7 +307,7 @@ template<typename T>
 inline static Hex hex(T i, int length = -1)
    { return Hex{i, length}; }
 
-inline void uprint_helper(const Hex &value) {
+inline void uprint_helper(Uprinter &u, const Hex &value) {
     //
     // !!! Would be nice if `Uprint::Hex` sensed if it got uint8 or uint16
     // (for instance), and had a different number of leading zeros.  This is
@@ -301,7 +317,7 @@ inline void uprint_helper(const Hex &value) {
     //
     char buf[10];
     itoa(value.i, buf, 16);
-    uart_puts(buf);
+    u.uputs(buf);
 }
 
 
@@ -315,13 +331,13 @@ template<typename T>
 inline static Binary binary(T i, int length = -1)
   { return Binary{i, length}; }
 
-inline void uprint_helper(const Binary &value) {
+inline void uprint_helper(Uprinter &u, const Binary &value) {
     //
     // !!! Similar idea could apply as with Hex.
     //
     char buf[10];  // !!! original callsites only used size 10 :-/
     itoa(value.i, buf, 2);
-    uart_puts(buf);
+    u.uputs(buf);
 }
 
 
@@ -337,9 +353,9 @@ inline static Units<T> units(T value, const char *label)
   { return Units<T>{value, label}; }
 
 template<typename T>
-inline void uprint_helper(const Units<T> &value) {
-    uprint_helper(value.value);
-    uprint_helper(value.label);
+inline void uprint_helper(Uprinter &u, const Units<T> &value) {
+    uprint_helper(u, value.value);
+    uprint_helper(u, value.label);
 }
 
 
